@@ -32,7 +32,7 @@ PINS_ENABLE = 22   # BCM (ENABLE del DRV8825 es activo en LOW)
 
 STEPS_PER_REV = 200        # Motor típico 1.8° -> 200 pasos/rev a paso completo
 MICROSTEP_DIV = 16         # Ajusta según MS1..MS3 en el driver (1,2,4,8,16,32)
-STEP_DELAY_S = 0.0007      # Retardo entre flancos de STEP (define velocidad)
+STEP_DELAY_S = 0.007      # Retardo entre flancos de STEP (define velocidad)
 
 # 8 posiciones igualmente espaciadas (0..7)
 NUM_POSITIONS = 8
@@ -68,15 +68,18 @@ class StepperDRV8825:
 
     def set_dir(self, clockwise: bool):
         # Define el sentido de giro; puede invertirse según cableado
-        self.dir_pin.value = True if clockwise else False
+        if clockwise:
+            self.dir_pin.on()
+        else:
+            self.dir_pin.off()
 
     def _pulse(self):
         # flanco de subida cuenta como paso en DRV8825
         self.step_pin.on()
         # Half-period corto; el total entre pulsos lo controla el caller
-        time.sleep(self.step_delay / 2)
+        time.sleep(self.step_delay)
         self.step_pin.off()
-        time.sleep(self.step_delay / 2)
+        time.sleep(self.step_delay)
 
     # ---- Alto nivel ----
     def step(self, steps: int):
@@ -157,8 +160,8 @@ def main():
                            microstep_div=MICROSTEP_DIV,
                            step_delay_s=STEP_DELAY_S)
 
-    osc = OscillatorThread(motor, amplitude_steps=100)
-    osc.start()
+    #osc = OscillatorThread(motor, amplitude_steps=100)
+    #osc.start()
 
     motor.enable()
     print("\n=== Control DRV8825 listo ===")
