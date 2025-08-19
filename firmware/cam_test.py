@@ -35,11 +35,15 @@ from picamera2 import Picamera2
 # ==========================
 # CONFIGURACIÓN
 # ==========================
-MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
+MQTT_BROKER = os.getenv("MQTT_BROKER", "35.223.234.244")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_TOPIC_CMD = os.getenv("MQTT_TOPIC_CMD", "lab/cam/cmd")
 MQTT_TOPIC_STATUS = os.getenv("MQTT_TOPIC_STATUS", "lab/cam/status")
 MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "pi-cam-preview")
+MQTT_USER = os.getenv("MQTT_USER", "iowlabs")
+MQTT_PASS = os.getenv("MQTT_PASS", "!iow_woi!")
+
+
 
 HTTP_HOST = os.getenv("HTTP_HOST", "0.0.0.0")
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
@@ -239,7 +243,7 @@ def start_threads_and_mqtt():
     client.on_message = on_message
 
     # Si usas credenciales:
-    # client.username_pw_set(os.getenv("MQTT_USER"), os.getenv("MQTT_PASS"))
+    client.username_pw_set(os.getenv("MQTT_USER"), os.getenv("MQTT_PASS"))
 
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     client.loop_start()
