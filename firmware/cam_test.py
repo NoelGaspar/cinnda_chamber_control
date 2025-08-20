@@ -35,14 +35,14 @@ from picamera2 import Picamera2
 # ==========================
 # CONFIGURACIÓN
 # ==========================
-MQTT_BROKER = os.getenv("MQTT_BROKER", "35.223.234.244")
-MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-MQTT_TOPIC_CMD = os.getenv("MQTT_TOPIC_CMD", "lab/cam/cmd")
-MQTT_TOPIC_STATUS = os.getenv("MQTT_TOPIC_STATUS", "lab/cam/status")
-MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "pi-cam-preview")
-MQTT_USER = os.getenv("MQTT_USER", "iowlabs")
-MQTT_PASS = os.getenv("MQTT_PASS", "!iow_woi!")
 
+MQTT_PORT           = "1883"
+MQTT_TOPIC_CMD      = "lab/cam/cmd"
+MQTT_TOPIC_STATUS   =  "lab/cam/status"
+MQTT_CLIENT_ID      = "lab_remoto"
+mqtt_broker         = "35.223.234.244"
+mqtt_psw            = "!iow_woi!"
+mqtt_user           = "iowlabs"
 
 
 HTTP_HOST = os.getenv("HTTP_HOST", "0.0.0.0")
@@ -182,13 +182,11 @@ def publish_status(client: mqtt.Client, payload: dict):
 
 
 def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        logging.info("MQTT conectado a %s:%d", MQTT_BROKER, MQTT_PORT)
-        client.subscribe(MQTT_TOPIC_CMD, qos=1)
-        publish_status(client, {"event": "online", "preview": f"http://{HTTP_HOST}:{HTTP_PORT}/preview"})
-    else:
-        logging.error("Fallo al conectar MQTT (rc=%s)", rc)
-
+    print("código de conexión MQTT:", rc)
+    logging.info("MQTT conectado a %s:%d", MQTT_BROKER, MQTT_PORT)
+    client.subscribe(MQTT_TOPIC_CMD, qos=1)
+    publish_status(client, {"event": "online", "preview": f"http://{HTTP_HOST}:{HTTP_PORT}/preview"})
+    
 
 def on_message(client, userdata, msg):
     try:
@@ -224,6 +222,16 @@ def on_message(client, userdata, msg):
             logging.exception("Error set_controls")
             publish_status(client, {"event": "error", "detail": str(e)})
 
+    elif cmd == "goto":
+        # go to position
+        positions = payload.get("pos")
+        try:
+            print(f"mov to position {positions})
+            publish_status(client, {"event": "goto", "pos": positions})
+        except Exception as e:
+            logging.exception("Error set_controls")
+            publish_status(client, {"event": "error", "detail": str(e)})
+
     else:
         logging.info("Comando desconocido: %s", cmd)
 
@@ -239,11 +247,12 @@ def start_threads_and_mqtt():
 
     # MQTT
     client = mqtt.Client(client_id=MQTT_CLIENT_ID, clean_session=True)
+     # Si usas credenciales:
+    client.username_pw_set(username = mqtt_user, password = mqtt_psw)
     client.on_connect = on_connect
     client.on_message = on_message
 
-    # Si usas credenciales:
-    client.username_pw_set(os.getenv("MQTT_USER"), os.getenv("MQTT_PASS"))
+   
 
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     client.loop_start()
