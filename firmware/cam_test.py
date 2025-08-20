@@ -35,15 +35,25 @@ from picamera2 import Picamera2
 # ==========================
 # CONFIGURACIÓN
 # ==========================
+PINS_STEP = 17     # BCM
+PINS_DIR = 27      # BCM
+PINS_ENABLE = 22   # BCM (ENABLE del DRV8825 es activo en LOW)
 
-MQTT_PORT           = "1883"
+STEPS_PER_REV = 200        # Motor típico 1.8° -> 200 pasos/rev a paso completo
+MICROSTEP_DIV = 16         # Ajusta según MS1..MS3 en el driver (1,2,4,8,16,32)
+STEP_DELAY_S = 0.007      # Retardo entre flancos de STEP (define velocidad)
+
+# 8 posiciones igualmente espaciadas (0..7)
+NUM_POSITIONS = 8
+
+# MQTT
+MQTT_PORT           = 1883
 MQTT_TOPIC_CMD      = "lab/cam/cmd"
 MQTT_TOPIC_STATUS   =  "lab/cam/status"
 MQTT_CLIENT_ID      = "lab_remoto"
 mqtt_broker         = "35.223.234.244"
 mqtt_psw            = "!iow_woi!"
 mqtt_user           = "iowlabs"
-
 
 HTTP_HOST = os.getenv("HTTP_HOST", "0.0.0.0")
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
@@ -64,6 +74,92 @@ logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
 )
+
+
+
+
+# ==========================
+# CLASE DE CONTROL
+# ==========================
+class StepperDRV8825:
+    def __init__(self, pin_step: int, pin_dir: int, pin_enable: int,
+                 steps_per_rev: int = 200, microstep_div: int = 1,
+                 step_delay_s: float = 0.001):
+        self.step_pin = DigitalOutputDevice(pin_step, active_high=True, initial_value=False)
+        self.dir_pin = DigitalOutputDevice(pin_dir, active_high=True, initial_value=False)
+        # ENABLE activo en low → usamos active_high=True y ponemos LOW para habilitar
+        self.en_pin = DigitalOutputDevice(pin_enable, active_high=True, initial_value=True)  # arranca deshabilitado (HIGH)
+
+        self.steps_full_rev = steps_per_rev
+        self.microstep_div = microstep_div
+        self.steps_per_rev = steps_per_rev * microstep_div
+        self.step_delay = step_delay_s
+
+        # Estado
+        self.current_step = 0  # posición absoluta [0 .. steps_per_rev-1]
+        self.lock = threading.Lock()
+
+    # ---- Bajo nivel ----
+    def enable(self):
+        # ENABLE activo en LOW
+        self.en_pin.off()  # LOW → habilita
+
+    def disable(self):
+        self.en_pin.on()   # HIGH → deshabilita
+
+    def set_dir(self, clockwise: bool):
+        # Define el sentido de giro; puede invertirse según cableado
+        if clockwise:
+            self.dir_pin.on()
+        else:
+            self.dir_pin.off()
+
+    def _pulse(self):
+        # flanco de subida cuenta como paso en DRV8825
+        self.step_pin.on()
+        # Half-period corto; el total entre pulsos lo controla el caller
+        time.sleep(self.step_delay)
+        self.step_pin.off()
+        time.sleep(self.step_delay)
+
+    # ---- Alto nivel ----
+    def step(self, steps: int):
+        if steps == 0:
+            return
+        self.enable()
+        clockwise = steps > 0
+        self.set_dir(clockwise)
+        n = abs(steps)
+        for _ in range(n):
+            self._pulse()
+            with self.lock:
+                if clockwise:
+                    self.current_step = (self.current_step + 1) % self.steps_per_rev
+                else:
+                    self.current_step = (self.current_step - 1) % self.steps_per_rev
+        # opcional: self.disable()
+
+    def goto_slot(self, slot_index: int, shortest_path: bool = True):
+        """Mueve al slot [0..NUM_POSITIONS-1]."""
+        slot_index %= NUM_POSITIONS
+        target_step = round(slot_index * (self.steps_per_rev / NUM_POSITIONS)) % self.steps_per_rev
+        with self.lock:
+            curr = self.current_step
+        delta = (target_step - curr) % self.steps_per_rev
+        if shortest_path and delta > self.steps_per_rev // 2:
+            delta = delta - self.steps_per_rev  # camino inverso más corto
+        self.step(delta)
+
+
+# ==========================
+# Motor (Stepper DRV8825)
+# ==========================
+motor = StepperDRV8825(PINS_STEP, PINS_DIR, PINS_ENABLE,
+                           steps_per_rev=STEPS_PER_REV,
+                           microstep_div=MICROSTEP_DIV,
+                           step_delay_s=STEP_DELAY_S)
+
+motor.enable()
 
 # ==========================
 # CÁMARA (Picamera2)
@@ -226,12 +322,23 @@ def on_message(client, userdata, msg):
         # go to position
         positions = payload.get("pos")
         try:
-            print(f"mov to position {positions}")
+            logging.exception("moving to slot %d", positions)
+            motor.goto_slot(positions)
             publish_status(client, {"event": "goto", "pos": positions})
         except Exception as e:
             logging.exception("Error set_controls")
             publish_status(client, {"event": "error", "detail": str(e)})
-
+    
+    elif cmd == "move":
+        # go to position
+        steps = payload.get("steps")
+        try:
+            logging.exception("moving %d steps", steps)
+            motor.step(steps)
+            publish_status(client, {"event": "move", "steps": steps})
+        except Exception as e:
+            logging.exception("Error set_controls")
+            publish_status(client, {"event": "error", "detail": str(e)})
     else:
         logging.info("Comando desconocido: %s", cmd)
 
