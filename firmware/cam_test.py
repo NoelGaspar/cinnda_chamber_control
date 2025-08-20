@@ -183,7 +183,7 @@ def publish_status(client: mqtt.Client, payload: dict):
 
 def on_connect(client, userdata, flags, rc):
     print("código de conexión MQTT:", rc)
-    logging.info("MQTT conectado a %s:%d", MQTT_BROKER, MQTT_PORT)
+    logging.info("MQTT conectado a %s:%d", mqtt_broker, MQTT_PORT)
     client.subscribe(MQTT_TOPIC_CMD, qos=1)
     publish_status(client, {"event": "online", "preview": f"http://{HTTP_HOST}:{HTTP_PORT}/preview"})
     
@@ -226,7 +226,7 @@ def on_message(client, userdata, msg):
         # go to position
         positions = payload.get("pos")
         try:
-            print(f"mov to position {positions})
+            print(f"mov to position {positions}")
             publish_status(client, {"event": "goto", "pos": positions})
         except Exception as e:
             logging.exception("Error set_controls")
@@ -254,7 +254,7 @@ def start_threads_and_mqtt():
 
    
 
-    client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+    client.connect(mqtt_broker, MQTT_PORT, keepalive=60)
     client.loop_start()
     return t, client
 
