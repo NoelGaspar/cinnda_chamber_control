@@ -58,7 +58,7 @@ NUM_POSITIONS = 8
 # MQTT
 MQTT_PORT           = 1883
 MQTT_TOPIC_CMD      = "lab/cam/cmd"
-MQTT_TOPIC_STATUS   =  "lab/cam/status"
+MQTT_TOPIC_STATUS   = "lab/cam/status"
 MQTT_CLIENT_ID      = "lab_remoto"
 mqtt_broker         = "35.223.234.244"
 mqtt_psw            = "!iow_woi!"
@@ -329,6 +329,7 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode('utf-8'))
+        print(f"Mensaje recibido en {msg.topic}: {payload}")
     except Exception as e:
         logging.warning("Payload no JSON: %s", e)
         return
@@ -336,6 +337,7 @@ def on_message(client, userdata, msg):
     cmd = payload.get("cmd")
     if cmd == "capture":
         filename = payload.get("name")
+        logging.warning("capturando imagen")
         if filename:
             if not filename.lower().endswith(".jpg"):
                 filename += ".jpg"
@@ -345,6 +347,7 @@ def on_message(client, userdata, msg):
         try:
             path = capture_still(path)
             publish_status(client, {"event": "captured", "path": path})
+            logging.warning("imagen enviada")
         except Exception as e:
             logging.exception("Error en captura")
             publish_status(client, {"event": "error", "detail": str(e)})
@@ -375,7 +378,7 @@ def on_message(client, userdata, msg):
             motor.goto_slot(positions)
             publish_status(client, {"event": "goto", "pos": positions})
         except Exception as e:
-            logging.exception("Error set_controls")
+            logging.exception("Error set_goto cmd")
             publish_status(client, {"event": "error", "detail": str(e)})
     
     elif cmd == "move":

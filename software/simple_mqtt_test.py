@@ -1,3 +1,4 @@
+import os
 import sys
 import json
 import time
@@ -14,7 +15,7 @@ USER = "iowlabs"       # opcional
 PASSWORD = "!iow_woi!"   # opcional
 
 
-SAVE_DIR = os.path.expanduser("~/capturas_remotas")
+SAVE_DIR = os.path.expanduser("/capturas_remotas")
 
 def on_connect(client, userdata, flags, rc):
     print("Conectado al broker con código:", rc)
@@ -28,11 +29,13 @@ def on_message(client, userdata, msg):
             print("Error al procesar mensaje:", e)
 
         if msg_payload.get("event") == "captured":
+            print("guardando imagen")
             os.makedirs(SAVE_DIR, exist_ok=True)
             url = msg_payload.get("url")
             name = msg_payload.get("filename") or f"capture_{int(time.time())}.jpg"
             if url:
                 dst = os.path.join(SAVE_DIR, name)
+                print("descargando imagen desde", url)
                 r = requests.get(url, stream=True, timeout=30)
                 r.raise_for_status()
                 with open(dst, "wb") as f:
@@ -57,7 +60,7 @@ try:
     pos = 0
     while True:
         print(f"Moviendo a posición {pos}")
-        cmd = json.dumps({"cmd":"move", "pos": pos})
+        cmd = json.dumps({"cmd":"goto", "pos": pos})
         client.publish(MQTT_TOPIC_CMD, cmd)
         time.sleep(5)
         
@@ -67,6 +70,8 @@ try:
         pos += 1
         if pos > 6:
             pos = 0
+
+
 except KeyboardInterrupt:
     print("\nSimulación detenida.")
     client.loop_stop()
