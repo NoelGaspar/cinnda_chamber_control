@@ -15,7 +15,7 @@ import pyqtgraph as pg
 
 from gui import Ui_MainWindow
 
-id = "lab_remoto"
+id = "lab_remoto_host"
 mqtt_broker = "35.223.234.244"
 mqtt_psw = "!iow_woi!"
 mqtt_user = "iowlabs"

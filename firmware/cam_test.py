@@ -25,12 +25,20 @@ import atexit
 import signal
 import logging
 import threading
+import random
 from datetime import datetime
 from typing import Optional, Tuple
 
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, jsonify, send_from_directory
 import paho.mqtt.client as mqtt
 from picamera2 import Picamera2
+
+try:
+    from gpiozero import DigitalOutputDevice , PWM
+except ImportError:
+    print("\n[ERROR] Falta gpiozero. Instala con: pip install gpiozero rpi-lgpio\n")
+    sys.exit(1)
+
 
 # ==========================
 # CONFIGURACIÓN
@@ -38,6 +46,7 @@ from picamera2 import Picamera2
 PINS_STEP = 17     # BCM
 PINS_DIR = 27      # BCM
 PINS_ENABLE = 22   # BCM (ENABLE del DRV8825 es activo en LOW)
+
 
 STEPS_PER_REV = 200        # Motor típico 1.8° -> 200 pasos/rev a paso completo
 MICROSTEP_DIV = 16         # Ajusta según MS1..MS3 en el driver (1,2,4,8,16,32)
@@ -59,6 +68,8 @@ HTTP_HOST = os.getenv("HTTP_HOST", "0.0.0.0")
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
 
 CAPTURE_DIR = os.getenv("CAPTURE_DIR", "/home/pi/captures")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://127.0.0.1:{HTTP_PORT}")
+
 
 # Tamaños y parámetros (ajusta a tu sensor)
 PREVIEW_SIZE: Tuple[int, int] = (1280, 720)   # preview (ancho, alto)
@@ -74,6 +85,32 @@ logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
 )
+
+
+# =================================
+# CLASE DE CONTROL DE TEMPERATURA
+# =================================
+class tempController:
+    def __init__(self, pin_pwm: int):
+        self.pwm = PWM(pin_pwm, active_high=True, initial_value=0, frequency=1000)
+        self.temp_sensor = None 
+        self.temp = 0.0
+        self.lock = threading.Lock()
+        self.current_duty = 0.0  # 0.0 .. 1.0
+
+    def readTemp(self):
+        print("read temp")
+
+
+
+    def get_duty_cycle(self) -> float:
+        with self.lock:
+            return self.current_duty
+
+    def off(self):
+        with self.lock:
+            self.pwm.value = 0.0
+            self.current_duty = 0.0
 
 
 
@@ -265,6 +302,9 @@ def http_capture():  # útil para pruebas rápidas sin MQTT
     path = capture_still()
     return jsonify({"captured": path})
 
+@app.route("/files/<path:fname>")
+def files(fname):
+    return send_from_directory(CAPTURE_DIR, fname, as_attachment=False)
 
 # ==========================
 # MQTT
@@ -282,7 +322,9 @@ def on_connect(client, userdata, flags, rc):
     logging.info("MQTT conectado a %s:%d", mqtt_broker, MQTT_PORT)
     client.subscribe(MQTT_TOPIC_CMD, qos=1)
     publish_status(client, {"event": "online", "preview": f"http://{HTTP_HOST}:{HTTP_PORT}/preview"})
-    
+
+
+
 
 def on_message(client, userdata, msg):
     try:
@@ -306,6 +348,13 @@ def on_message(client, userdata, msg):
         except Exception as e:
             logging.exception("Error en captura")
             publish_status(client, {"event": "error", "detail": str(e)})
+        
+
+        # dentro de on_message(), caso cmd == "capture" (tras obtener path)
+        basename = os.path.basename(path)
+        url = f"{PUBLIC_BASE_URL}/files/{basename}"
+        publish_status(client, {"event": "captured", "path": path, "filename": basename, "url": url})
+
 
     elif cmd == "set":
         # Ajuste de controles libcamera, ej: {"cmd":"set", "controls":{"ExposureTime": 8000}}
@@ -322,7 +371,7 @@ def on_message(client, userdata, msg):
         # go to position
         positions = payload.get("pos")
         try:
-            logging.exception("moving to slot %d", positions)
+            logging.info("moving to slot %d", positions)
             motor.goto_slot(positions)
             publish_status(client, {"event": "goto", "pos": positions})
         except Exception as e:
@@ -333,20 +382,31 @@ def on_message(client, userdata, msg):
         # go to position
         steps = payload.get("steps")
         try:
-            logging.exception("moving %d steps", steps)
+            logging.info("moving %d steps", steps)
             motor.step(steps)
             publish_status(client, {"event": "move", "steps": steps})
         except Exception as e:
             logging.exception("Error set_controls")
             publish_status(client, {"event": "error", "detail": str(e)})
+    
+    elif cmd == "get_temp":
+        try:
+            logging.info("sending temp")
+            temp = random.uniform(20.0, 30.0)  # replace with actual temperature reading
+            publish_status(client, {"event": "temp", "temp": temp})
+        except Exception as e:
+            logging.exception("Error set_controls")
+            publish_status(client, {"event": "error", "detail": str(e)}) 
     else:
         logging.info("Comando desconocido: %s", cmd)
+
+
+
 
 
 # ==========================
 # ARRANQUE / PARADA
 # ==========================
-
 def start_threads_and_mqtt():
     # Hilo de preview
     t = threading.Thread(target=preview_worker, name="preview-worker", daemon=True)
@@ -393,7 +453,7 @@ def main():
     signal.signal(signal.SIGTERM, _graceful_exit)
 
     logging.info("Servicio HTTP escuchando en http://%s:%d", HTTP_HOST, HTTP_PORT)
-    app.run(host=HTTP_HOST, port=HTTP_PORT, debug=False, threaded=True)
+    app.run(host = HTTP_HOST, port=HTTP_PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
