@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+from datetime import datetime
 import requests
 from collections import deque
 import paho.mqtt.client as mqtt
@@ -63,7 +64,9 @@ try:
         cmd = json.dumps({"cmd":"goto", "pos": pos})
         client.publish(MQTT_TOPIC_CMD, cmd)
         time.sleep(5)
-        
+        fname=f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        cmd = json.dumps({"cmd":"capture", "name": fname})
+        client.publish(MQTT_TOPIC_CMD, cmd)
         print(f"adquiriendo una imagen")
 
         time.sleep(10)

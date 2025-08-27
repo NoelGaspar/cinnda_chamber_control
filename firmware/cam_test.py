@@ -34,7 +34,7 @@ import paho.mqtt.client as mqtt
 from picamera2 import Picamera2
 
 try:
-    from gpiozero import DigitalOutputDevice , PWM
+    from gpiozero import DigitalOutputDevice , PWMOutputDevice
 except ImportError:
     print("\n[ERROR] Falta gpiozero. Instala con: pip install gpiozero rpi-lgpio\n")
     sys.exit(1)
@@ -346,18 +346,15 @@ def on_message(client, userdata, msg):
             path = None
         try:
             path = capture_still(path)
-            publish_status(client, {"event": "captured", "path": path})
+            # dentro de on_message(), caso cmd == "capture" (tras obtener path)
+            basename = os.path.basename(path)
+            url = f"{PUBLIC_BASE_URL}/files/{basename}"
+            publish_status(client, {"event": "captured", "path": path, "filename": basename, "url": url})
             logging.warning("imagen enviada")
         except Exception as e:
             logging.exception("Error en captura")
             publish_status(client, {"event": "error", "detail": str(e)})
         
-
-        # dentro de on_message(), caso cmd == "capture" (tras obtener path)
-        basename = os.path.basename(path)
-        url = f"{PUBLIC_BASE_URL}/files/{basename}"
-        publish_status(client, {"event": "captured", "path": path, "filename": basename, "url": url})
-
 
     elif cmd == "set":
         # Ajuste de controles libcamera, ej: {"cmd":"set", "controls":{"ExposureTime": 8000}}
