@@ -34,7 +34,7 @@ import paho.mqtt.client as mqtt
 from picamera2 import Picamera2
 
 try:
-    from gpiozero import DigitalOutputDevice , PWMOutputDevice
+    from gpiozero import DigitalOutputDevice , PWMOutputDevice, PWMLED
 except ImportError:
     print("\n[ERROR] Falta gpiozero. Instala con: pip install gpiozero rpi-lgpio\n")
     sys.exit(1)
@@ -43,13 +43,13 @@ except ImportError:
 # ==========================
 # CONFIGURACIÓN
 # ==========================
-PINS_STEP = 17     # BCM
-PINS_DIR = 27      # BCM
+PINS_STEP   = 17     # BCM
+PINS_DIR    = 27      # BCM
 PINS_ENABLE = 22   # BCM (ENABLE del DRV8825 es activo en LOW)
+PIN_LED     = 4        # CAM ILUMINATION 
 
-
-STEPS_PER_REV = 200        # Motor típico 1.8° -> 200 pasos/rev a paso completo
-MICROSTEP_DIV = 16         # Ajusta según MS1..MS3 en el driver (1,2,4,8,16,32)
+STEPS_PER_REV = 800        # Motor típico 1.8° -> 200 pasos/rev a paso completo
+MICROSTEP_DIV = 1         # Ajusta según MS1..MS3 en el driver (1,2,4,8,16,32)
 STEP_DELAY_S = 0.007      # Retardo entre flancos de STEP (define velocidad)
 
 # 8 posiciones igualmente espaciadas (0..7)
@@ -68,7 +68,7 @@ HTTP_HOST = os.getenv("HTTP_HOST", "0.0.0.0")
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
 
 CAPTURE_DIR = os.getenv("CAPTURE_DIR", "/home/pi/captures")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://127.0.0.1:{HTTP_PORT}")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://172.30.64.195:{HTTP_PORT}")
 
 
 # Tamaños y parámetros (ajusta a tu sensor)
@@ -115,9 +115,9 @@ class tempController:
 
 
 
-# ==========================
-# CLASE DE CONTROL
-# ==========================
+# ============================
+# CLASE DE CONTROL DEL MOTOR
+# ============================
 class StepperDRV8825:
     def __init__(self, pin_step: int, pin_dir: int, pin_enable: int,
                  steps_per_rev: int = 200, microstep_div: int = 1,
@@ -186,6 +186,28 @@ class StepperDRV8825:
         if shortest_path and delta > self.steps_per_rev // 2:
             delta = delta - self.steps_per_rev  # camino inverso más corto
         self.step(delta)
+
+# ============================
+# LED
+# ============================
+class LED:
+    def __init__(self, pin_led: int):
+        self.led = PWMLED(pin_step)
+        self.led.off()
+        self.value = 0
+        
+    def set_value(self, value: int):
+        if value < 0 or value > 100:
+            raise ValueError("El valor debe estar entre 0 y 100")
+        self.value = value
+        self.led.value = value / 100.0
+    
+    def off(self):
+        self.led.off()
+
+    def on(self):
+        self.led.on()
+        self.led.value = self.value / 100.0
 
 
 # ==========================
@@ -327,6 +349,7 @@ def on_connect(client, userdata, flags, rc):
 
 
 def on_message(client, userdata, msg):
+    state = "bussy"
     try:
         payload = json.loads(msg.payload.decode('utf-8'))
         print(f"Mensaje recibido en {msg.topic}: {payload}")
@@ -336,8 +359,9 @@ def on_message(client, userdata, msg):
 
     cmd = payload.get("cmd")
     if cmd == "capture":
+        led.on()
         filename = payload.get("name")
-        logging.warning("capturando imagen")
+        logging.info("capturando imagen")
         if filename:
             if not filename.lower().endswith(".jpg"):
                 filename += ".jpg"
@@ -350,12 +374,12 @@ def on_message(client, userdata, msg):
             basename = os.path.basename(path)
             url = f"{PUBLIC_BASE_URL}/files/{basename}"
             publish_status(client, {"event": "captured", "path": path, "filename": basename, "url": url})
-            logging.warning("imagen enviada")
+            logging.info("imagen enviada")
         except Exception as e:
             logging.exception("Error en captura")
             publish_status(client, {"event": "error", "detail": str(e)})
+        led.off()
         
-
     elif cmd == "set":
         # Ajuste de controles libcamera, ej: {"cmd":"set", "controls":{"ExposureTime": 8000}}
         controls = payload.get("controls", {})
@@ -397,8 +421,21 @@ def on_message(client, userdata, msg):
         except Exception as e:
             logging.exception("Error set_controls")
             publish_status(client, {"event": "error", "detail": str(e)}) 
+    
+    elif cmd == "LED":
+        # go to position
+        power = payload.get("pwr")
+        try:
+            logging.info("setting LED power to %d %", power)
+            led.value(power)
+            publish_status(client, {"event": "LED", "pwr": power})
+        except Exception as e:
+            logging.exception("Error set_controls")
+            publish_status(client, {"event": "error", "detail": str(e)})
     else:
         logging.info("Comando desconocido: %s", cmd)
+    
+    state = "idle"
 
 
 
@@ -443,6 +480,7 @@ def stop_everything(client: Optional[mqtt.Client] = None):
 
 
 def main():
+    state = "idle"
     preview_thread, client = start_threads_and_mqtt()
 
     def _graceful_exit(*_):
@@ -454,8 +492,13 @@ def main():
 
     logging.info("Servicio HTTP escuchando en http://%s:%d", HTTP_HOST, HTTP_PORT)
     app.run(host = HTTP_HOST, port=HTTP_PORT, debug=False, threaded=True)
-
-
+    while True:
+        if state != "bussy":
+            motor.step(600)
+            time.sleep(2)
+            motor.step(-600)
+            time.sleep(2)
+         
 if __name__ == "__main__":
     main()
 
