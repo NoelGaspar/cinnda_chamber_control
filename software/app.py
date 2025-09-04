@@ -1,24 +1,25 @@
 import sys
 import json
 import time
+import datetime
 from collections import deque
 
 from PyQt5.QtWidgets import QMainWindow, QApplication
 from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QPixmap
 
-
-
-
 import paho.mqtt.client as mqtt
 import pyqtgraph as pg
 
 from gui import Ui_MainWindow
 
-id = "lab_remoto"
+id = "host_remoto"
 mqtt_broker = "35.223.234.244"
 mqtt_psw = "!iow_woi!"
 mqtt_user = "iowlabs"
+MQTT_TOPIC_CMD      = "lab/cam/cmd"
+MQTT_TOPIC_STATUS   = "lab/cam/status"
+
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -87,7 +88,7 @@ class MainApp(QMainWindow):
 
     def on_connect(self, client, userdata, flags, rc):
         print("Conectado al broker con código:", rc)
-        client.subscribe("/lab/cam/status")
+        client.subscribe(MQTT_TOPIC_STATUS)
 
     def on_message(self, client, userdata, msg):
         try:
@@ -118,21 +119,20 @@ class MainApp(QMainWindow):
         value = self.ui.doubleSpinBox_2.value()
         self.current_setpoint = value
         print(f"setting set point. new value: {value}")
-        payload = json.dumps({"cmd":"setpoint", "arg": value})
-        self.mqtt_client.publish("/temp/setpoint", payload)
-
+        payload = json.dumps({"cmd":"setpoint", "sp": value})
+        self.mqtt_client.publish(MQTT_TOPIC_CMD, payload)
 
     def toggle_device(self, checked):
         self.state = not self.state
         self.ui.pushButton_8.setText("Apagar" if self.state else "Encender")
         print(f"Enviando comando de encendido: {self.state}")
-        payload = json.dumps({"cmd": "power", "arg": self.state})
-        self.mqtt_client.publish("/temp/control", json.dumps(payload))
+        payload = json.dumps({"cmd": "enable_temp", "enable": self.state})
+        self.mqtt_client.publish(MQTT_TOPIC_CMD, json.dumps(payload))
 
     def set_home(self):
         print("sending home command")
         payload = json.dumps({"cmd": "home", "arg": 1})
-        self.mqtt_client.publish("/temp/control", json.dumps(payload))
+        self.mqtt_client.publish(MQTT_TOPIC_CMD, json.dumps(payload))
 
     def set_rpm(self):    
         value = self.ui.spinBox.value()
@@ -144,8 +144,8 @@ class MainApp(QMainWindow):
     def move(self):
         pos = self.ui.comboBox_2.currentText()
         print(f"Moving to position {pos}")
-        payload = json.dumps({"cmd": "move", "arg": pos})
-        self.mqtt_client.publish("/temp/control", json.dumps(payload))
+        payload = json.dumps({"cmd": "goto", "pos": pos})
+        self.mqtt_client.publish(MQTT_TOPIC_CMD, json.dumps(payload))
 
     def setZoom(self):
         zoom_text = self.ui.comboBox.currentText()
@@ -165,8 +165,9 @@ class MainApp(QMainWindow):
 
     def photoTake(self):
         print(f"Adquiring photo")
-        payload = json.dumps({"cmd": "take", "arg": 1})
-        self.mqtt_client.publish("/temp/control", json.dumps(payload))
+        fname=f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        payload = json.dumps({"cmd":"capture", "name": fname})
+        self.mqtt_client.publish(MQTT_TOPIC_CMD, json.dumps(payload))
 
     def update_plot(self):
         if not self.timestamps:

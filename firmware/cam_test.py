@@ -218,7 +218,7 @@ class TemperatureController(threading.Thread):
                        sample_time = sample_time,
                        output_limits=(output_min, output_max),
                        proportional_on_measurement = p_on_m)
-        self.enabled = True
+        self.enabled = False
         self.max_temp_cutoff_c = TEMP_MAX_CUTOFF
         self._stop = threading.Event()
         self._last_read_c: Optional[float] = None
@@ -270,15 +270,16 @@ class TemperatureController(threading.Thread):
                     self.heater.off()
                     time.sleep(period)
                     continue
-                if not self.enabled:
-                    self.heater.off()
-                    time.sleep(period)
-                    continue
+               
                 # PID: pasar medición devuelve 'duty'
                 out = self.pid(t_c)
                 out_pwm = out / 100.0  # convertir a 0.0 .. 1.0
                 logging.info(" Temp: %f °C", t_c)
                 logging.info(" Salida ajustada a : %f", out)
+                if not self.enabled:
+                    self.heater.off()
+                    time.sleep(period)
+                    continue
                 self.heater.set(out_pwm)
                 self._last_out = out
                 self._fault = None
@@ -562,7 +563,7 @@ def on_message(client, userdata, msg):
             publish_status(client, {"event": "error", "detail": str(e)})
         led.off()
         
-    elif cmd == "set":
+    elif cmd == "set_cam":
         # Ajuste de controles libcamera, ej: {"cmd":"set", "controls":{"ExposureTime": 8000}}
         controls = payload.get("controls", {})
         try:
@@ -603,7 +604,29 @@ def on_message(client, userdata, msg):
         except Exception as e:
             logging.exception("Error set_controls")
             publish_status(client, {"event": "error", "detail": str(e)}) 
+
+    elif cmd == "setpoint": 
+        # set temperature setpoint
+        t_sp = payload.get("sp")
+        try:
+            logging.info("setting temperature setpoint to %f °C", t_sp)
+            ctrl.set_setpoint(t_sp)
+            publish_status(client, {"event": "setpoint", "setpoint": t_sp})
+        except Exception as e:
+            logging.exception("Error set_controls")
+            publish_status(client, {"event": "error", "detail": str(e)})
     
+    elif cmd == "enable_temp":
+        # enable/disable temperature control
+        v = payload.get("enable")
+        try:
+            logging.info("setting temperature control to %s", v)
+            ctrl.enable(v)
+            publish_status(client, {"event": "enable_temp", "enable": v})
+        except Exception as e:
+            logging.exception("Error set_controls")
+            publish_status(client, {"event": "error", "detail": str(e)})
+
     elif cmd == "LED":
         # go to position
         power = payload.get("pwr")
