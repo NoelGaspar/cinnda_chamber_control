@@ -1,2 +1,6 @@
-- Avtivate virtual env:
+- connect to the raspberry
+ssh cinnda@172.30.64.195
+
+- Activate virtual env:
 source ~/venvs/labremoto/bin/activate
+

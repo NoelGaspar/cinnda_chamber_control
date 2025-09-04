@@ -40,6 +40,7 @@ class MainApp(QMainWindow):
         self.timestamps = deque(maxlen=self.max_points)
         self.temperatures = deque(maxlen=self.max_points)
         self.setpoints = deque(maxlen=self.max_points)
+        self.pwr_outputs = deque(maxlen=self.max_points)
         self.current_setpoint = 25.0
         self.rpm = 0
         
@@ -63,7 +64,8 @@ class MainApp(QMainWindow):
 
         self.temp_curve = self.plot.plot(pen=pg.mkPen('b', width=2), name="Temperatura")
         self.setpoint_curve = self.plot.plot(pen=pg.mkPen('r', style=pg.QtCore.Qt.DashLine), name="Setpoint")
-
+        self.pwr_curve = self.plot.plot(pen=pg.mkPen('g', width=2), name="Potencia")
+        
         self.ui.comboBox_2.addItems(["zona 1", "zona 2", "zona 3", "zona 4", "zona 5", "zona 6", "zona 7", "zona 8"])
         self.ui.comboBox.addItems(["zoom x1", "zoom x2", "zoom x10", "zoom x100"])
         
@@ -85,15 +87,28 @@ class MainApp(QMainWindow):
 
     def on_connect(self, client, userdata, flags, rc):
         print("Conectado al broker con código:", rc)
-        client.subscribe("/temp/value")
+        client.subscribe("/lab/cam/status")
 
     def on_message(self, client, userdata, msg):
         try:
-            temp = float(msg.payload.decode())
-            now = time.time()
-            self.timestamps.append(now)
-            self.temperatures.append(temp)
-            self.setpoints.append(self.current_setpoint)
+            msg_payload = json.loads(msg.payload.decode('utf-8'))
+            print(f"Mensaje recibido: {msg_payload} ")
+        except Exception as e:
+            print("Error al procesar mensaje:", e)
+        try:
+            if msg_payload.get("event") == "error":
+                print("Error reportado:", msg_payload.get("detail"))
+            elif msg_payload.get("event") == "temp":
+                temp = msg_payload.get("temp")
+                setpoint = msg_payload.get("setpoint", self.current_setpoint)
+                pwm_out = msg_payload.get("pwr")
+                timestamp = time.time()
+                if temp is not None:
+                    self.temperatures.append(temp)
+                    self.timestamps.append(timestamp)
+                    self.setpoints.append(setpoint)
+                    self.pwr_outputs.append(pwm_out)
+                    print(f"Temperatura actual: {temp} °C, Setpoint: {setpoint} °C")       
         except Exception as e:
             print("Error al procesar mensaje:", e)
 
@@ -160,6 +175,7 @@ class MainApp(QMainWindow):
         times = [t - t0 for t in self.timestamps]
 
         self.temp_curve.setData(times, list(self.temperatures))
+        self.pwr_curve.setData(times, list(self.pwr_outputs))
         self.setpoint_curve.setData(times, list(self.setpoints))
 
 

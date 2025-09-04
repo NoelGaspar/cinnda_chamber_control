@@ -89,9 +89,9 @@ frequency_hz    = 1000  # 1 kHz suele ir bien para calefactor
 active_high     = True
 
 # PID vars
-Kp = 30.0
-Ki = 5.0
-Kd = 10.0
+Kp = 1.0
+Ki = 0.1
+Kd = 0.05
 
 sample_time = 0.5     # s – periodo del lazo
 output_min  = 0.0     # duty min
@@ -253,6 +253,8 @@ class TemperatureController(threading.Thread):
 
     def pub_temp(self):
         return self._last_read_c
+    def pub_pwr(self):
+        return self._last_out
 
     # Hilo de control
     def run(self):
@@ -277,7 +279,7 @@ class TemperatureController(threading.Thread):
                 out_pwm = out / 100.0  # convertir a 0.0 .. 1.0
                 logging.info(" Temp: %f °C", t_c)
                 logging.info(" Salida ajustada a : %f", out)
-                #self.heater.set(out_pwm)
+                self.heater.set(out_pwm)
                 self._last_out = out
                 self._fault = None
             except Exception as e:
@@ -625,8 +627,9 @@ def report_temperature(client: mqtt.Client, interval: float = 10.0):
     while not stop_event.is_set():
         try:
             temp = ctrl.pub_temp()
+            pwr = ctrl.pub_pwr()
             if temp is not None:
-                publish_status(client, {"event": "temp", "temp": temp})
+                publish_status(client, {"event": "temp", "temp": temp, "pwr": pwr})
         except Exception as e:
             logging.warning("Error publicando temperatura: %s", e)
         time.sleep(interval)
