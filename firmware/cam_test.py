@@ -95,7 +95,7 @@ Kd = 10.0
 
 sample_time = 0.5     # s – periodo del lazo
 output_min  = 0.0     # duty min
-output_max  = 1.0     # duty max
+output_max  = 100     # duty max
 p_on_m      = True    # proporcional sobre medición
 
 
@@ -166,7 +166,7 @@ class TempSensor:
             raise RuntimeError(f"Voltaje fuera de rango Vmeas={Vmeas:.3f}V")
         
         # Rntc = R_series * Vntc / (Vcc - Vntc)
-        Rntc = R_SERIE * (Vmeas / (Vcc - Vmeas))
+        Rntc = R_SERIE * ((Vcc - Vmeas)/Vmeas)
         # Beta model
         T0_K = T0_C + 273.15
         lnRR0 = math.log(Rntc / R0)
@@ -274,9 +274,10 @@ class TemperatureController(threading.Thread):
                     continue
                 # PID: pasar medición devuelve 'duty'
                 out = self.pid(t_c)
+                out_pwm = out / 100.0  # convertir a 0.0 .. 1.0
                 logging.info(" Temp: %f °C", t_c)
                 logging.info(" Salida ajustada a : %f", out)
-                #self.heater.set(out)
+                #self.heater.set(out_pwm)
                 self._last_out = out
                 self._fault = None
             except Exception as e:
@@ -399,7 +400,6 @@ motor.enable()
 sensor = TempSensor()
 heater = HeaterPWM()
 ctrl = TemperatureController(sensor, heater, max_temp_cutoff_c=60.0)
-
 ctrl.set_setpoint(37.0)
 
 # ==========================
