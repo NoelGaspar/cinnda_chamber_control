@@ -58,15 +58,47 @@ class MainApp(QMainWindow):
         self.ui.widget_2.layout.addWidget(self.plot)
 
         self.plot.setBackground('w')
-        self.plot.setLabel('left', 'Temperatura (°C)')
-        self.plot.setLabel('bottom', 'Tiempo (s)')
-        self.plot.addLegend()
+        self.plot.setLabel('left', 'Potencia (%))')
+        self.plot.setLabel('bottom', 'Tiempo (s)')    
         self.plot.showGrid(x = True, y = True)
 
-        self.temp_curve = self.plot.plot(pen=pg.mkPen('b', width=2), name="Temperatura")
-        self.setpoint_curve = self.plot.plot(pen=pg.mkPen('r', style=pg.QtCore.Qt.DashLine), name="Setpoint")
-        self.pwr_curve = self.plot.plot(pen=pg.mkPen('g', width=2), name="Potencia")
-        
+        pi = self.plot.getPlotItem()
+        pi.showAxis('right')
+        pi.getAxis('right').setLabel('Temperatura (°C)')
+
+        # ViewBox secundaria para el eje derecho
+        self.vb_temp = pg.ViewBox()
+        pi.scene().addItem(self.vb_temp)
+        pi.getAxis('right').linkToView(self.vb_temp)
+        self.vb_temp.setXLink(pi.vb)
+
+        def _updateViews():
+            self.vb_temp.setGeometry(pi.vb.sceneBoundingRect())
+            self.vb_temp.linkedViewChanged(pi.vb, self.vb_temp.XAxis)
+
+        _updateViews()
+        pi.vb.sigResized.connect(_updateViews)
+        # Curvas: potencia (izquierda), temperatura y setpoint (derecha)
+        self.legend = pi.addLegend()
+
+        # Potencia en naranja (izquierdo)
+        self.pwr_curve = pi.plot(pen=pg.mkPen((255,140,0), width=2), name="Potencia")
+
+
+        self.temp_curve = pg.PlotDataItem(pen=pg.mkPen('b', width=2))
+        self.setpoint_curve = pg.PlotDataItem(pen=pg.mkPen('r', width=1, style=pg.QtCore.Qt.DashLine))
+ 
+        self.vb_temp.addItem(self.temp_curve)
+        self.vb_temp.addItem(self.setpoint_curve)
+
+        self.legend.addItem(self.temp_curve, "Temperatura")
+        self.legend.addItem(self.setpoint_curve, "Setpoint")
+        self.legend.addItem(self.pwr_curve, "Potencia")
+
+        # Rango fijo 0–100% para potencia (opcional)
+        pi.setYRange(0, 100)
+
+
         self.ui.comboBox_2.addItems(["zona 1", "zona 2", "zona 3", "zona 4", "zona 5", "zona 6", "zona 7", "zona 8"])
         self.ui.comboBox.addItems(["zoom x1", "zoom x2", "zoom x10", "zoom x100"])
         
@@ -127,25 +159,25 @@ class MainApp(QMainWindow):
         self.ui.pushButton_8.setText("Apagar" if self.state else "Encender")
         print(f"Enviando comando de encendido: {self.state}")
         payload = json.dumps({"cmd": "enable_temp", "enable": self.state})
-        self.mqtt_client.publish(MQTT_TOPIC_CMD, json.dumps(payload))
+        self.mqtt_client.publish(MQTT_TOPIC_CMD, payload)
 
     def set_home(self):
         print("sending home command")
         payload = json.dumps({"cmd": "home", "arg": 1})
-        self.mqtt_client.publish(MQTT_TOPIC_CMD, json.dumps(payload))
+        self.mqtt_client.publish(MQTT_TOPIC_CMD,payload)
 
     def set_rpm(self):    
         value = self.ui.spinBox.value()
         self.rpm = value
         print(f"setting RPM. new value: {value}")
         payload = json.dumps({"cmd": "rpm", "arg": value})
-        self.mqtt_client.publish("/temp/control", json.dumps(payload))
-
+        self.mqtt_client.publish("/temp/control", payload)
+    
     def move(self):
         pos = self.ui.comboBox_2.currentText()
         print(f"Moving to position {pos}")
         payload = json.dumps({"cmd": "goto", "pos": pos})
-        self.mqtt_client.publish(MQTT_TOPIC_CMD, json.dumps(payload))
+        self.mqtt_client.publish(MQTT_TOPIC_CMD, payload)
 
     def setZoom(self):
         zoom_text = self.ui.comboBox.currentText()
@@ -161,13 +193,13 @@ class MainApp(QMainWindow):
             print("Zoom option not recognized")
         print(f"Setting digital zoom to {self.zoom}")
         payload = json.dumps({"cmd": "zoom", "arg": self.zoom})
-        self.mqtt_client.publish("/temp/control", json.dumps(payload))
+        self.mqtt_client.publish("/temp/control", payload)
 
     def photoTake(self):
         print(f"Adquiring photo")
         fname=f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
         payload = json.dumps({"cmd":"capture", "name": fname})
-        self.mqtt_client.publish(MQTT_TOPIC_CMD, json.dumps(payload))
+        self.mqtt_client.publish(MQTT_TOPIC_CMD, payload)
 
     def update_plot(self):
         if not self.timestamps:
@@ -176,8 +208,11 @@ class MainApp(QMainWindow):
         times = [t - t0 for t in self.timestamps]
 
         self.temp_curve.setData(times, list(self.temperatures))
-        self.pwr_curve.setData(times, list(self.pwr_outputs))
         self.setpoint_curve.setData(times, list(self.setpoints))
+
+        # Si pwr_outputs viene 0..1 (duty), escalar a 0..100
+        #pwr_pct = [(p or 0)*100 for p in self.pwr_outputs]
+        self.pwr_curve.setData(times, list(self.pwr_outputs))
 
 
 if __name__ == "__main__":

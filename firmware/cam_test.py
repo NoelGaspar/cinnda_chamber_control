@@ -272,14 +272,15 @@ class TemperatureController(threading.Thread):
                     continue
                
                 # PID: pasar medición devuelve 'duty'
-                out = self.pid(t_c)
-                out_pwm = out / 100.0  # convertir a 0.0 .. 1.0
+                
                 logging.info(" Temp: %f °C", t_c)
                 logging.info(" Salida ajustada a : %f", out)
                 if not self.enabled:
                     self.heater.off()
                     time.sleep(period)
                     continue
+                out = self.pid(t_c)
+                out_pwm = out / 100.0  # convertir a 0.0 .. 1.0
                 self.heater.set(out_pwm)
                 self._last_out = out
                 self._fault = None
