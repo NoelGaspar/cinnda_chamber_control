@@ -39,14 +39,27 @@ except ImportError:
     print("\n[ERROR] Falta gpiozero. Instala con: pip install gpiozero rpi-lgpio\n")
     sys.exit(1)
 
+# ADS1115 (Adafruit CircuitPython)
+import board
+import busio
+from adafruit_ads1x15.ads1115 import ADS1115, P0, P1, P2, P3
+from adafruit_ads1x15.analog_in import AnalogIn
+
+# PID
+from simple_pid import PID
+
+
 
 # ==========================
 # CONFIGURACIÓN
 # ==========================
-PINS_STEP   = 17     # BCM
-PINS_DIR    = 27      # BCM
+PINS_STEP   = 17   # BCM
+PINS_DIR    = 27   # BCM
 PINS_ENABLE = 22   # BCM (ENABLE del DRV8825 es activo en LOW)
-PIN_LED     = 4        # CAM ILUMINATION 
+PIN_LED     = 4    # CAM ILUMINATION 
+PIN_PWM     = 18   # BCM (para control de temperatura)|
+
+
 
 STEPS_PER_REV = 800        # Motor típico 1.8° -> 200 pasos/rev a paso completo
 MICROSTEP_DIV = 1         # Ajusta según MS1..MS3 en el driver (1,2,4,8,16,32)
@@ -54,6 +67,36 @@ STEP_DELAY_S = 0.007      # Retardo entre flancos de STEP (define velocidad)
 
 # 8 posiciones igualmente espaciadas (0..7)
 NUM_POSITIONS = 8
+
+
+# parametros para el lazo de control de la temperatura
+VCC         = 3.3          # Voltaje del divisor
+R_SERIE     = 10000.0      # Ohmios del resistor en serie
+R0          = 10000.0      # Ohmios a T0
+T0_C        = 25.0         # °C de referencia
+BETA        = 3950.0       # Constante Beta del NTC
+TEMP_MAX_CUTOFF = 70
+TEMP_DEFAULT_SETPOINT = 37.0
+
+ads1115_address = 0x48       # Dirección I2C del ADS1115
+default_channel = 0          # 0..3
+ads1115_gain    = 1             # ±4.096V → suficiente para 3.3V
+ads_115_rate    = 250      # sps
+avg_n           = 5 
+
+frequency_hz    = 1000  # 1 kHz suele ir bien para calefactor
+active_high     = True
+
+# PID vars
+Kp = 30.0
+Ki = 5.0
+Kd = 10.0
+
+sample_time = 0.5     # s – periodo del lazo
+output_min  = 0.0     # duty min
+output_max  = 1.0     # duty max
+p_on_m      = True    # proporcional sobre medición
+
 
 # MQTT
 MQTT_PORT           = 1883
@@ -90,30 +133,157 @@ logging.basicConfig(
 # =================================
 # CLASE DE CONTROL DE TEMPERATURA
 # =================================
-class tempController:
-    def __init__(self, pin_pwm: int):
-        self.pwm = PWM(pin_pwm, active_high=True, initial_value=0, frequency=1000)
-        self.temp_sensor = None 
-        self.temp = 0.0
-        self.lock = threading.Lock()
-        self.current_duty = 0.0  # 0.0 .. 1.0
+class TempSensor:
+    def __init__(self):
+        self._i2c = busio.I2C(board.SCL, board.SDA, frequency=100000)
+        self._ads = ADS1115( self._i2c, address = ads1115_address )
+        
+        self._ads.gain = ads1115_gain
+        self._ads.data_rate = ads_115_rate
 
-    def readTemp(self):
-        print("read temp")
+        self._ain = AnalogIn(self._ads, ch)
+        
+        self._avg_n = max(1, avg_n)
+        self._avg_buf = deque(maxlen=self._avg_n)
+
+    def _voltage(self) :
+        # AnalogIn.voltage ya compensa el gain y referencia interna
+        return float(self._ain.voltage)
+
+    def _moving_avg(self, v):
+        self._avg_buf.append(v)
+        return sum(self._avg_buf) / len(self._avg_buf)
+
+    def read_temperature_c(self):
+        """Lee voltaje, estima Rntc, aplica modelo Beta y devuelve °C.
+        Asume divisor: Vcc -- R_series --(Vmeas)-- NTC -- GND
+        """
+        Vmeas = self._voltage()
+        Vcc   = VCC
+
+        if Vmeas <= 0.0 or Vmeas >= Vcc:
+            raise RuntimeError(f"Voltaje fuera de rango Vmeas={Vmeas:.3f}V")
+        
+        # Rntc = R_series * Vntc / (Vcc - Vntc)
+        Rntc = R_SERIE * (Vmeas / (Vcc - Vmeas))
+        # Beta model
+        T0_K = T0_C + 273.15
+        lnRR0 = math.log(Rntc / R0)
+        invT = 1.0/T0_K + (1.0/BETA) * lnRR0
+        T_K = 1.0 / invT
+        T_C = T_K - 273.15
+        # Filtros suaves
+        #T_med = self._median_filter(T_C)
+        T_avg = self._moving_avg(T_med)
+        return T_avg
 
 
+# -------------------------
+# Actuador calefactor (PWM)
+# -------------------------
+class HeaterPWM:
+    def __init__(self):
+        self.dev = PWMOutputDevice(pin=PIN_PWM)
+        self._duty = 0.0
 
-    def get_duty_cycle(self) -> float:
-        with self.lock:
-            return self.current_duty
+    def set(self, duty):
+        d = max(0.0, min(1.0, float(duty))) # PWM on raspberry go from 0.0  to  1.0
+        self.dev.value = d
+        self._duty = d
+
+    def duty(self):
+        return self._duty
 
     def off(self):
-        with self.lock:
-            self.pwm.value = 0.0
-            self.current_duty = 0.0
+        self.dev.value = 0.0
+
+    def on(self):
+        self.dev.value = self._duty
 
 
+# ============================
+# Hilo de control de temperatura
 
+class TemperatureController(threading.Thread):
+    def __init__(self,
+                 sensor: TempSensor,
+                 heater: HeaterPWM,
+                 max_temp_cutoff_c: float = TEMP_MAX_CUTOFF):
+        super().__init__(daemon=True)
+        self.sensor = sensor
+        self.heater = heater
+        self.pid = PID( Kp, Ki, Kd,
+                       setpoint = TEMP_DEFAULT_SETPOINT,  # default
+                       sample_time = sample_time,
+                       output_limits=(output_min, output_max),
+                       proportional_on_measurement = p_on_m)
+        self.enabled = True
+        self.max_temp_cutoff_c = TEMP_MAX_CUTOFF
+        self._stop = threading.Event()
+        self._last_read_c: Optional[float] = None
+        self._last_out: float = 0.0
+        self._fault: Optional[str] = None
+        self._setpoint = TEMP_DEFAULT_SETPOINT
+
+    # API externa
+    def set_setpoint(self, t_c):
+        self.pid.setpoint = float(t_c)
+        self._setpoint = float(t_c)
+
+    def set_pid(self, kp: float, ki: float, kd: float):
+        self.pid.tunings = (float(kp), float(ki), float(kd))
+
+    def enable(self, v: bool):
+        self.enabled = bool(v)
+        if not v:
+            self.heater.off()
+
+    def stop(self):
+        self._stop.set()
+
+    def get_status(self):
+        return {
+            'enabled': self.enabled,
+            'setpoint_c': self.pid.setpoint,
+            'temp_c': self._last_read_c,
+            'duty': self._last_out,
+            'fault': self._fault,
+        }
+
+    def pub_temp(self):
+        return self._last_read_c
+
+    # Hilo de control
+    def run(self):
+        period = self.pid.sample_time or 0.5
+        while not self._stop.is_set():
+            t0 = time.time()
+            try:
+                t_c = self.sensor.read_temperature_c()
+                self._last_read_c = t_c
+                # Seguridad
+                if t_c >= self.max_temp_cutoff_c:
+                    self._fault = f"Corte por sobretemperatura: {t_c:.2f}°C >= {self.max_temp_cutoff_c:.2f}°C"
+                    self.heater.off()
+                    time.sleep(period)
+                    continue
+                if not self.enabled:
+                    self.heater.off()
+                    time.sleep(period)
+                    continue
+                # PID: pasar medición devuelve 'duty'
+                out = self.pid(t_c)
+                self.heater.set(out)
+                self._last_out = out
+                self._fault = None
+            except Exception as e:
+                logging.warning("Fallo lectura/control: %s", e)
+                self._fault = str(e)
+                self.heater.off()
+            # Mantener periodo
+            dt = time.time() - t0
+            if dt < period:
+                time.sleep(period - dt)
 
 # ============================
 # CLASE DE CONTROL DEL MOTOR
@@ -219,6 +389,15 @@ motor = StepperDRV8825(PINS_STEP, PINS_DIR, PINS_ENABLE,
                            step_delay_s=STEP_DELAY_S)
 
 motor.enable()
+
+# ==========================
+# Temperature control loop
+# ==========================
+sensor = TempSensorADS1115NTC()
+heater = HeaterPWM()
+ctrl = TemperatureController(sensor, heater, max_temp_cutoff_c=60.0)
+
+ctrl.set_setpoint(37.0)
 
 # ==========================
 # CÁMARA (Picamera2)
@@ -346,8 +525,6 @@ def on_connect(client, userdata, flags, rc):
     publish_status(client, {"event": "online", "preview": f"http://{HTTP_HOST}:{HTTP_PORT}/preview"})
 
 
-
-
 def on_message(client, userdata, msg):
     state = "bussy"
     try:
@@ -437,8 +614,19 @@ def on_message(client, userdata, msg):
     
     state = "idle"
 
+# ==========================
+# Publicar temperatura periódicamente
+# ==========================
 
-
+def report_temperature(client: mqtt.Client, interval: float = 10.0):
+    while not stop_event.is_set():
+        try:
+            temp = ctrl.pub_temp()
+            if temp is not None:
+                publish_status(client, {"event": "temp", "temp": temp})
+        except Exception as e:
+            logging.warning("Error publicando temperatura: %s", e)
+        time.sleep(interval)
 
 
 # ==========================
@@ -460,6 +648,14 @@ def start_threads_and_mqtt():
 
     client.connect(mqtt_broker, MQTT_PORT, keepalive=60)
     client.loop_start()
+
+    #activate control thread
+    ctrl.start()
+    #activate report temperature thread
+    
+    pub_temp_tread = threading.Thread(target=report_temperature, args=(client,), daemon=True)
+    pub_temp_tread.start()
+
     return t, client
 
 
