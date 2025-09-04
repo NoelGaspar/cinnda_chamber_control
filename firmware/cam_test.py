@@ -19,13 +19,14 @@ import sys
 import cv2
 import json
 import time
-import queue
+from collections import deque
 import errno
 import atexit
 import signal
 import logging
 import threading
 import random
+import math
 from datetime import datetime
 from typing import Optional, Tuple
 
@@ -141,7 +142,7 @@ class TempSensor:
         self._ads.gain = ads1115_gain
         self._ads.data_rate = ads_115_rate
 
-        self._ain = AnalogIn(self._ads, ch)
+        self._ain = AnalogIn(self._ads, default_channel)
         
         self._avg_n = max(1, avg_n)
         self._avg_buf = deque(maxlen=self._avg_n)
@@ -174,7 +175,7 @@ class TempSensor:
         T_C = T_K - 273.15
         # Filtros suaves
         #T_med = self._median_filter(T_C)
-        T_avg = self._moving_avg(T_med)
+        T_avg = self._moving_avg(T_C)
         return T_avg
 
 
@@ -273,7 +274,9 @@ class TemperatureController(threading.Thread):
                     continue
                 # PID: pasar medición devuelve 'duty'
                 out = self.pid(t_c)
-                self.heater.set(out)
+                logging.info(" Temp: %f °C", t_c)
+                logging.info(" Salida ajustada a : %f", out)
+                #self.heater.set(out)
                 self._last_out = out
                 self._fault = None
             except Exception as e:
@@ -393,7 +396,7 @@ motor.enable()
 # ==========================
 # Temperature control loop
 # ==========================
-sensor = TempSensorADS1115NTC()
+sensor = TempSensor()
 heater = HeaterPWM()
 ctrl = TemperatureController(sensor, heater, max_temp_cutoff_c=60.0)
 
@@ -688,6 +691,7 @@ def main():
 
     logging.info("Servicio HTTP escuchando en http://%s:%d", HTTP_HOST, HTTP_PORT)
     app.run(host = HTTP_HOST, port=HTTP_PORT, debug=False, threaded=True)
+   
     while True:
         if state != "bussy":
             motor.step(600)

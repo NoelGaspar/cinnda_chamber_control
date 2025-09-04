@@ -1,0 +1,2 @@
+- Avtivate virtual env:
+source ~/venvs/labremoto/bin/activate
