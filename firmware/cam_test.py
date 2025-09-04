@@ -77,7 +77,7 @@ R0          = 10000.0      # Ohmios a T0
 T0_C        = 25.0         # °C de referencia
 BETA        = 3950.0       # Constante Beta del NTC
 TEMP_MAX_CUTOFF = 70
-TEMP_DEFAULT_SETPOINT = 37.0
+TEMP_DEFAULT_SETPOINT = 24.0
 
 ads1115_address = 0x48       # Dirección I2C del ADS1115
 default_channel = 0          # 0..3
@@ -272,9 +272,6 @@ class TemperatureController(threading.Thread):
                     continue
                
                 # PID: pasar medición devuelve 'duty'
-                
-                logging.info(" Temp: %f °C", t_c)
-                logging.info(" Salida ajustada a : %f", out)
                 if not self.enabled:
                     self.heater.off()
                     time.sleep(period)
@@ -284,6 +281,8 @@ class TemperatureController(threading.Thread):
                 self.heater.set(out_pwm)
                 self._last_out = out
                 self._fault = None
+                logging.info(" Temp: %f °C", t_c)
+                logging.info(" Salida ajustada a : %f", out)
             except Exception as e:
                 logging.warning("Fallo lectura/control: %s", e)
                 self._fault = str(e)
@@ -647,13 +646,14 @@ def on_message(client, userdata, msg):
 # Publicar temperatura periódicamente
 # ==========================
 
-def report_temperature(client: mqtt.Client, interval: float = 10.0):
+def report_temperature(client: mqtt.Client, interval: float = 1.0):
     while not stop_event.is_set():
         try:
             temp = ctrl.pub_temp()
             pwr = ctrl.pub_pwr()
+            sp = ctrl.get_status().get("setpoint_c")
             if temp is not None:
-                publish_status(client, {"event": "temp", "temp": temp, "pwr": pwr})
+                publish_status(client, {"event": "temp", "temp": temp, "pwr": pwr, "sp":sp})
         except Exception as e:
             logging.warning("Error publicando temperatura: %s", e)
         time.sleep(interval)
