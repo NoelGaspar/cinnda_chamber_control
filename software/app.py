@@ -2,6 +2,8 @@ import sys
 import json
 import time
 import datetime
+import csv 
+from pathlib import Path
 from collections import deque
 
 from PyQt5.QtWidgets import QMainWindow, QApplication
@@ -45,6 +47,13 @@ class MainApp(QMainWindow):
         self.current_setpoint = 25.0
         self.rpm = 0
         
+        #logging to CSV
+        self.log_dir = Path.cwd() / "logs"
+        self.log_dir.mkdir(exist_ok=True)
+        self.csv_file = None
+        self.csv_writer = None
+        self.log_t0 = None  # instante de inicio de logging
+
         self.state = False
         
         #Imagen de cámara
@@ -141,7 +150,8 @@ class MainApp(QMainWindow):
                     self.timestamps.append(timestamp)
                     self.setpoints.append(setpoint)
                     self.pwr_outputs.append(pwm_out)
-                    print(f"Temperatura actual: {temp} °C, Setpoint: {setpoint} °C")       
+                    print(f"Temperatura actual: {temp} °C, Setpoint: {setpoint} °C")
+                    self.write_csv_sample(timestamp, temp, setpoint, pwm_out)       
         except Exception as e:
             print("Error al procesar mensaje:", e)
 
@@ -160,6 +170,10 @@ class MainApp(QMainWindow):
         print(f"Enviando comando de encendido: {self.state}")
         payload = json.dumps({"cmd": "enable_temp", "enable": self.state})
         self.mqtt_client.publish(MQTT_TOPIC_CMD, payload)
+        if self.state:
+            self.start_csv_log()
+        else:
+            self.stop_csv_log()
 
     def set_home(self):
         print("sending home command")
@@ -214,6 +228,49 @@ class MainApp(QMainWindow):
         #pwr_pct = [(p or 0)*100 for p in self.pwr_outputs]
         self.pwr_curve.setData(times, list(self.pwr_outputs))
 
+    # --- CSV logger ---
+    def start_csv_log(self):
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        fname = self.log_dir / f"log_{ts}.csv"
+        self.csv_file = open(fname, "w", newline="", encoding="utf-8")
+        self.csv_writer = csv.writer(self.csv_file)
+        self.csv_writer.writerow(["iso_time", "t_rel_s", "temp_c", "setpoint_c", "power_pct"])
+        self.csv_file.flush()
+        self.log_t0 = time.time()
+        print(f"[CSV] grabando en: {fname}")
+
+    def stop_csv_log(self):
+        if self.csv_file:
+            try:
+                self.csv_file.flush()
+                self.csv_file.close()
+            finally:
+                self.csv_file = None
+                self.csv_writer = None
+                self.log_t0 = None
+        print("[CSV] archivo cerrado")
+
+    def write_csv_sample(self, timestamp, temp, setpoint, pwr):
+        """
+        Escribe una fila si el logging está activo.
+        timestamp: epoch (seg)
+        temp: °C
+        setpoint: °C
+        pwr: duty 0..1 (se registra como %)
+        """
+        if self.csv_writer and self.log_t0 is not None:
+            t_rel = timestamp - self.log_t0
+            pwr_pct = (pwr or 0) * 100 if pwr is not None else ""
+            self.csv_writer.writerow([
+                datetime.datetime.fromtimestamp(timestamp).isoformat(timespec="seconds"),
+                f"{t_rel:.3f}",
+                f"{float(temp):.3f}" if temp is not None else "",
+                f"{float(setpoint):.3f}" if setpoint is not None else "",
+                f"{pwr_pct:.2f}" if pwr is not None else "",
+            ])
+            # flush ocasional para no perder datos si se corta
+            if len(self.timestamps) % 20 == 0:
+                self.csv_file.flush()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
