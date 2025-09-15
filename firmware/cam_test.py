@@ -388,6 +388,8 @@ class LED:
         self.led.on()
         self.led.value = self.value / 100.0
 
+led = LED(PIN_LED)
+led.off()
 
 # ==========================
 # Motor (Stepper DRV8825)
@@ -645,10 +647,14 @@ def on_message(client, userdata, msg):
 
     elif cmd == "LED":
         # go to position
-        power = payload.get("pwr")
+        power = payload.get("state")
         try:
             logging.info("setting LED power to %d %", power)
-            led.value(power)
+            led.set_value(100)
+            if power:
+                led.on()
+            else:
+                led.off()
             publish_status(client, {"event": "LED", "pwr": power})
         except Exception as e:
             logging.exception("Error set_controls")

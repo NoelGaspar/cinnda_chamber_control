@@ -204,6 +204,7 @@ class MainApp(QMainWindow):
         self.ui.pushButton_7.clicked.connect(self.set_rpm)
         self.ui.pushButton_2.clicked.connect(self.setZoom)
         self.ui.pushButton_4.clicked.connect(self.photoTake)
+        self.ui.checkBox.stateChanged.connect(self.led)
 
         self.startPreview()
         
@@ -238,6 +239,11 @@ class MainApp(QMainWindow):
             print("Error al procesar mensaje:", e)
 
     # --- UI Actions ---
+    def led(self):
+        state = self.ui.checkBox.isChecked()
+        print(f"turning led on/off. state: {state}")
+        payload = json.dumps({"cmd":"LED", "state": state})
+        self.mqtt_client.publish(MQTT_TOPIC_CMD, payload)
 
     def set_setpoint(self, value):
         value = self.ui.doubleSpinBox_2.value()
