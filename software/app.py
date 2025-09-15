@@ -2,10 +2,13 @@ import sys
 import json
 import time
 import datetime
+from datetime import datetime
+import requests
 import csv 
 from pathlib import Path
 from collections import deque
 
+from PyQt5 import QtCore, QtGui
 from PyQt5.QtWidgets import QMainWindow, QApplication
 from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QPixmap
@@ -23,12 +26,84 @@ MQTT_TOPIC_CMD      = "lab/cam/cmd"
 MQTT_TOPIC_STATUS   = "lab/cam/status"
 
 
+# ==========================
+# HILO: Lector de MJPEG
+# ==========================
+class MjpegStreamThread(QtCore.QThread):
+    frameReady = QtCore.pyqtSignal(QtGui.QImage)
+    error = QtCore.pyqtSignal(str)
+    info = QtCore.pyqtSignal(str)
+
+    def __init__(self, url: str, parent=None, timeout=10):
+        super().__init__(parent)
+        self.url = url
+        self.timeout = timeout
+
+    def run(self):
+        try:
+            # stream=True nos entrega el cuerpo sin cargar completo
+            with requests.get(self.url, stream=True, timeout=self.timeout) as r:
+                if r.status_code != 200:
+                    self.error.emit(f"HTTP {r.status_code} al abrir {self.url}")
+                    return
+                ctype = r.headers.get('Content-Type', '')
+                # Esperamos algo como: multipart/x-mixed-replace; boundary=frame
+                boundary = None
+                if 'boundary=' in ctype:
+                    boundary = ctype.split('boundary=')[-1].strip()
+                if not boundary:
+                    # Usa el del servidor del ejemplo
+                    boundary = 'frame'
+                boundary_bytes = ('--' + boundary).encode()
+
+                self.info.emit(f"Conectado. Content-Type: {ctype}")
+
+                raw = r.raw
+                raw.decode_content = True
+
+                # Leemos línea a línea detectando cada parte del multipart
+                while not self.isInterruptionRequested():
+                    line = raw.readline()
+                    if not line:
+                        self.error.emit("Conexión cerrada")
+                        break
+                    if line.startswith(boundary_bytes):
+                        # Lee headers de la parte
+                        headers = {}
+                        while True:
+                            h = raw.readline()
+                            if not h or h == b"\r\n":
+                                break
+                            try:
+                                k, v = h.decode('utf-8', 'ignore').split(':', 1)
+                                headers[k.strip().lower()] = v.strip()
+                            except ValueError:
+                                pass
+                        content_length = int(headers.get('content-length', '0'))
+                        if content_length > 0:
+                            jpg = raw.read(content_length)
+                            # Leer CRLF final de la parte
+                            _ = raw.readline()
+                            image = QtGui.QImage.fromData(jpg)
+                            if not image.isNull():
+                                self.frameReady.emit(image)
+                        else:
+                            # Si no viene Content-Length, intentar leer hasta próxima frontera (menos eficiente)
+                            # No implementado aquí por simplicidad; la mayoría de servidores MJPEG lo envían.
+                            pass
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class MainApp(QMainWindow):
     def __init__(self):
         super().__init__()
 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+
+        # Set the window title
+        self.setWindowTitle("Remote Lab Control")
 
         # MQTT setup
         self.mqtt_client = mqtt.Client()
@@ -59,6 +134,10 @@ class MainApp(QMainWindow):
         #Imagen de cámara
         pixmap = QPixmap("captura_27.png")  # ruta relativa o absoluta
         self.ui.image_viewer.setPixmap(pixmap)
+        self.ui.image_viewer.setMinimumHeight(380)
+
+        #streaming thread
+        self.streamThread  = None
 
         # Gráfico
         # Configurar pyqtgraph en el widget
@@ -91,7 +170,7 @@ class MainApp(QMainWindow):
         self.legend = pi.addLegend()
 
         # Potencia en naranja (izquierdo)
-        self.pwr_curve = pi.plot(pen=pg.mkPen((255,140,0), width=2), name="Potencia")
+        self.pwr_curve = pi.plot(pen=pg.mkPen((255,140,0), width=2))
 
 
         self.temp_curve = pg.PlotDataItem(pen=pg.mkPen('b', width=2))
@@ -119,11 +198,14 @@ class MainApp(QMainWindow):
         # Conexión de señales
         self.ui.pushButton.clicked.connect(self.set_setpoint)
         self.ui.pushButton_8.clicked.connect(self.toggle_device)
+        self.ui.pushButton_10.clicked.connect(self.set_pid)
         self.ui.pushButton_5.clicked.connect(self.set_home)
         self.ui.pushButton_6.clicked.connect(self.move)
         self.ui.pushButton_7.clicked.connect(self.set_rpm)
         self.ui.pushButton_2.clicked.connect(self.setZoom)
         self.ui.pushButton_4.clicked.connect(self.photoTake)
+
+        self.startPreview()
         
     # --- MQTT Handlers ---
 
@@ -162,6 +244,15 @@ class MainApp(QMainWindow):
         self.current_setpoint = value
         print(f"setting set point. new value: {value}")
         payload = json.dumps({"cmd":"setpoint", "sp": value})
+        self.mqtt_client.publish(MQTT_TOPIC_CMD, payload)
+
+    def set_pid(self, value):
+        _kp = self.ui.doubleSpinBox_3.value()
+        _ki = self.ui.doubleSpinBox_4.value()
+        _kd = self.ui.doubleSpinBox_5.value()
+    
+        print(f"setting set point. new value: kp: {_kp}, ki: {_ki}, kd: {_kd}")
+        payload = json.dumps({"cmd":"setpid", "kp": _kp, "ki": _ki, "kd": _kd})
         self.mqtt_client.publish(MQTT_TOPIC_CMD, payload)
 
     def toggle_device(self, checked):
@@ -227,6 +318,37 @@ class MainApp(QMainWindow):
         # Si pwr_outputs viene 0..1 (duty), escalar a 0..100
         #pwr_pct = [(p or 0)*100 for p in self.pwr_outputs]
         self.pwr_curve.setData(times, list(self.pwr_outputs))
+
+    # --- Preview ---
+    def startPreview(self):
+        if self.streamThread and self.streamThread.isRunning():
+            return
+        url = "http://172.30.64.195:8080/preview"
+        self.streamThread = MjpegStreamThread(url)
+        self.streamThread.frameReady.connect(self.onFrame)
+        self.streamThread.error.connect(self.log)
+        self.streamThread.info.connect(self.log)
+        self.streamThread.start()
+        self.log(f"Abriendo preview: {url}")
+
+    def stopPreview(self):
+        if self.streamThread:
+            self.streamThread.requestInterruption()
+            self.streamThread.wait(1500)
+            self.streamThread = None
+    
+    @QtCore.pyqtSlot(QtGui.QImage)
+    def onFrame(self, img: QtGui.QImage):
+        # Ajusta al tamaño del QLabel manteniendo proporción
+        pix = QtGui.QPixmap.fromImage(img)
+        if not pix.isNull():
+            pix = pix.scaled(self.ui.image_viewer.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            self.ui.image_viewer.setPixmap(pix)
+    # ---------- Utilidades ----------
+    @QtCore.pyqtSlot(str)
+    def log(self, text: str):
+        ts = datetime.now().strftime('%H:%M:%S')
+        print(f"[{ts}] {text}")
 
     # --- CSV logger ---
     def start_csv_log(self):

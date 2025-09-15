@@ -1,6 +1,39 @@
+Convertir ui to .py on pyqt app
+
+- pyuic5 -x your_ui_file.ui -o your_python_file.py
+
+broker para monitorear la temperatura
+- mosquitto_sub -h 35.223.234.244 -p 1883 -P '!iow_woi!' -u 'iowlabs' -t 'lab/cam/status'
+
 - connect to the raspberry
 ssh cinnda@172.30.64.195
 
 - Activate virtual env:
 source ~/venvs/labremoto/bin/activate
 
+aviables cmd
+- capture : trigger capture a image and send the link to download it by the host
+ return  event msg with the url to download the image
+
+- set_cam : set the config for the raspi camera 
+    return event with parameters setteds
+
+- goto: move the motor to a default position
+    arg: "pos" (int) position to move the sistem. go between 0 and 7 
+    return a event with the position moved
+
+- "move": move the motor a X number the stepps.
+    arg: "steps" int. number of steps to move the motor. 
+
+- "get_temp": cmd to ask for the last temperature registered
+
+- "LED" :  cmd to turn on off the LED of the cam imlumination
+    arg : "pwr" float to set the power of the imlumination, go between 0 and 1.
+    return event with the pwr setted
+
+- "enable_temp": cmd to start and stop the temperature control loop. Enable the pwm output to the heater. 
+    - arg: "enable" boolean. True to enable, False to disable.
+    - return event with the status of the temperature control loop 
+
+- "setpoint": configure the temperature setpoint 
+    - arg: 

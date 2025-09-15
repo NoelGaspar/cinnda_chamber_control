@@ -90,7 +90,7 @@ active_high     = True
 
 # PID vars
 Kp = 1.0
-Ki = 0.1
+Ki = 0.
 Kd = 0.05
 
 sample_time = 0.5     # s – periodo del lazo
@@ -237,6 +237,7 @@ class TemperatureController(threading.Thread):
     def enable(self, v: bool):
         self.enabled = bool(v)
         if not v:
+            logging.info("turning the heater to off:")
             self.heater.off()
 
     def stop(self):
@@ -253,6 +254,7 @@ class TemperatureController(threading.Thread):
 
     def pub_temp(self):
         return self._last_read_c
+    
     def pub_pwr(self):
         return self._last_out
 
@@ -612,6 +614,20 @@ def on_message(client, userdata, msg):
             logging.info("setting temperature setpoint to %f °C", t_sp)
             ctrl.set_setpoint(t_sp)
             publish_status(client, {"event": "setpoint", "setpoint": t_sp})
+        except Exception as e:
+            logging.exception("Error set_controls")
+            publish_status(client, {"event": "error", "detail": str(e)})
+
+    elif cmd == "setpid": 
+        # set temperature setpoint
+        _kp = payload.get("kp")
+        _kd = payload.get("kd")
+        _ki = payload.get("ki")
+
+        try:
+            logging.info("setting pid parameters to kp: %f, kd: %f , ki:%f ", (_kp, _kd, _ki))
+            ctrl.set_pid(_kp, _ki, _kd)
+            publish_status(client, {"event": "setpid", "kp": _kp, "ki": _ki, "kd": _kd})
         except Exception as e:
             logging.exception("Error set_controls")
             publish_status(client, {"event": "error", "detail": str(e)})
