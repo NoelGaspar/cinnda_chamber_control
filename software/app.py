@@ -138,6 +138,10 @@ class MainApp(QMainWindow):
 
         #streaming thread
         self.streamThread  = None
+        
+        # default values
+        self.ui.doubleSpinBox_2.setValue(25.00)  # setpoint
+        self.ui.lineEdit.setReadOnly(True)      # temperatura actual
 
         # Gráfico
         # Configurar pyqtgraph en el widget
@@ -230,19 +234,20 @@ class MainApp(QMainWindow):
                 timestamp = time.time()
                 if temp is not None:
                     self.temperatures.append(temp)
+                    self.ui.lineEdit.setText(f"{temp:.2f}")
                     self.timestamps.append(timestamp)
                     self.setpoints.append(setpoint)
                     self.pwr_outputs.append(pwm_out)
                     print(f"Temperatura actual: {temp} °C, Setpoint: {setpoint} °C")
                     self.write_csv_sample(timestamp, temp, setpoint, pwm_out)       
         except Exception as e:
-            print("Error al procesar mensaje:", e)
+            print("Error al procesar evento:", e)
 
     # --- UI Actions ---
     def led(self):
         state = self.ui.checkBox.isChecked()
         print(f"turning led on/off. state: {state}")
-        payload = json.dumps({"cmd":"LED", "state": state})
+        payload = json.dumps({"cmd":"LED", "state": state, "pwr":100})
         self.mqtt_client.publish(MQTT_TOPIC_CMD, payload)
 
     def set_setpoint(self, value):
@@ -390,7 +395,7 @@ class MainApp(QMainWindow):
             t_rel = timestamp - self.log_t0
             pwr_pct = (pwr or 0) * 100 if pwr is not None else ""
             self.csv_writer.writerow([
-                datetime.datetime.fromtimestamp(timestamp).isoformat(timespec="seconds"),
+                datetime.fromtimestamp(timestamp).isoformat(timespec="seconds"),
                 f"{t_rel:.3f}",
                 f"{float(temp):.3f}" if temp is not None else "",
                 f"{float(setpoint):.3f}" if setpoint is not None else "",

@@ -90,8 +90,8 @@ active_high     = True
 
 # PID vars
 Kp = 1.0
-Ki = 0.
-Kd = 0.05
+Ki = 0.01
+Kd = 0.1
 
 sample_time = 0.5     # s – periodo del lazo
 output_min  = 0.0     # duty min
@@ -111,7 +111,7 @@ mqtt_user           = "iowlabs"
 HTTP_HOST = os.getenv("HTTP_HOST", "0.0.0.0")
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
 
-CAPTURE_DIR = os.getenv("CAPTURE_DIR", "/home/pi/captures")
+CAPTURE_DIR = os.getenv("CAPTURE_DIR", "./captures")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://172.30.64.195:{HTTP_PORT}")
 
 
@@ -371,7 +371,7 @@ class StepperDRV8825:
 # ============================
 class LED:
     def __init__(self, pin_led: int):
-        self.led = PWMLED(pin_step)
+        self.led = PWMLED(pin_led)
         self.led.off()
         self.value = 0
         
@@ -388,8 +388,8 @@ class LED:
         self.led.on()
         self.led.value = self.value / 100.0
 
-led = LED(PIN_LED)
-led.off()
+led_ctrl = LED(PIN_LED)
+led_ctrl.off()
 
 # ==========================
 # Motor (Stepper DRV8825)
@@ -649,7 +649,7 @@ def on_message(client, userdata, msg):
         # go to position
         power = payload.get("state")
         try:
-            logging.info("setting LED power to %d %", power)
+            logging.info("setting LED power to %s %", power)
             led.set_value(100)
             if power:
                 led.on()
