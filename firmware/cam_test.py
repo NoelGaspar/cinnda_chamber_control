@@ -546,7 +546,7 @@ def on_message(client, userdata, msg):
 
     cmd = payload.get("cmd")
     if cmd == "capture":
-        led.on()
+        led_ctrl.on()
         filename = payload.get("name")
         logging.info("capturando imagen")
         if filename:
@@ -565,7 +565,7 @@ def on_message(client, userdata, msg):
         except Exception as e:
             logging.exception("Error en captura")
             publish_status(client, {"event": "error", "detail": str(e)})
-        led.off()
+        led_ctrl.off()
         
     elif cmd == "set_cam":
         # Ajuste de controles libcamera, ej: {"cmd":"set", "controls":{"ExposureTime": 8000}}
@@ -650,11 +650,11 @@ def on_message(client, userdata, msg):
         power = payload.get("state")
         try:
             logging.info("setting LED power to %s %", power)
-            led.set_value(100)
+            led_ctrl.set_value(100)
             if power:
-                led.on()
+                led_ctrl.on()
             else:
-                led.off()
+                led_ctrl.off()
             publish_status(client, {"event": "LED", "pwr": power})
         except Exception as e:
             logging.exception("Error set_controls")
